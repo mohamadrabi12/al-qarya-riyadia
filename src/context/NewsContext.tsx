@@ -1,7 +1,8 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import type { NewsArticle, Category } from '../types';
-import { supabase } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { sampleNews } from '../data/sampleNews';
 
 interface NewsContextType {
   articles: NewsArticle[];
@@ -16,6 +17,7 @@ interface NewsContextType {
 }
 
 const NewsContext = createContext<NewsContextType | undefined>(undefined);
+const STORAGE_KEY = 'al-qarya-news';
 
 type DbRow = Record<string, unknown>;
 
@@ -36,10 +38,24 @@ function dbToArticle(row: DbRow): NewsArticle {
 }
 
 export function NewsProvider({ children }: { children: ReactNode }) {
-  const [articles, setArticles] = useState<NewsArticle[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [articles, setArticles] = useState<NewsArticle[]>(() => {
+    if (!isSupabaseConfigured) {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      return stored ? JSON.parse(stored) : sampleNews;
+    }
+    return [];
+  });
+  const [loading, setLoading] = useState(isSupabaseConfigured);
+
+  // localStorage sync when Supabase not configured
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(articles));
+    }
+  }, [articles]);
 
   const fetchArticles = useCallback(async () => {
+    if (!isSupabaseConfigured) return;
     setLoading(true);
     const { data, error } = await supabase
       .from('articles')
@@ -52,10 +68,15 @@ export function NewsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    fetchArticles();
+    if (isSupabaseConfigured) fetchArticles();
   }, [fetchArticles]);
 
   const addArticle = async (article: Omit<NewsArticle, 'id' | 'views'>) => {
+    if (!isSupabaseConfigured) {
+      const newArticle: NewsArticle = { ...article, id: Date.now().toString(), views: 0 };
+      setArticles(prev => [newArticle, ...prev]);
+      return;
+    }
     const { data, error } = await supabase
       .from('articles')
       .insert([{
@@ -78,6 +99,10 @@ export function NewsProvider({ children }: { children: ReactNode }) {
   };
 
   const updateArticle = async (id: string, updated: Partial<NewsArticle>) => {
+    if (!isSupabaseConfigured) {
+      setArticles(prev => prev.map(a => a.id === id ? { ...a, ...updated } : a));
+      return;
+    }
     const db: DbRow = {};
     if (updated.title !== undefined) db.title = updated.title;
     if (updated.summary !== undefined) db.summary = updated.summary;
@@ -89,7 +114,6 @@ export function NewsProvider({ children }: { children: ReactNode }) {
     if (updated.isBreaking !== undefined) db.is_breaking = updated.isBreaking;
     if (updated.isFeatured !== undefined) db.is_featured = updated.isFeatured;
     if (updated.views !== undefined) db.views = updated.views;
-
     const { error } = await supabase.from('articles').update(db).eq('id', id);
     if (!error) {
       setArticles(prev => prev.map(a => a.id === id ? { ...a, ...updated } : a));
@@ -97,6 +121,10 @@ export function NewsProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteArticle = async (id: string) => {
+    if (!isSupabaseConfigured) {
+      setArticles(prev => prev.filter(a => a.id !== id));
+      return;
+    }
     const { error } = await supabase.from('articles').delete().eq('id', id);
     if (!error) {
       setArticles(prev => prev.filter(a => a.id !== id));
@@ -110,15 +138,9 @@ export function NewsProvider({ children }: { children: ReactNode }) {
 
   return (
     <NewsContext.Provider value={{
-      articles,
-      loading,
-      addArticle,
-      updateArticle,
-      deleteArticle,
-      getArticleById,
-      getArticlesByCategory,
-      getFeaturedArticles,
-      getBreakingNews,
+      articles, loading,
+      addArticle, updateArticle, deleteArticle,
+      getArticleById, getArticlesByCategory, getFeaturedArticles, getBreakingNews,
     }}>
       {children}
     </NewsContext.Provider>

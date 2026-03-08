@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { useNews } from '../../context/NewsContext';
-import { supabase } from '../../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import type { Category, NewsArticle } from '../../types';
 
 const CATEGORIES: Category[] = ['كرة القدم', 'كرة السلة', 'التنس', 'السباحة', 'الملاكمة', 'غيرها'];
@@ -19,6 +19,10 @@ const DEFAULT_FORM = {
 };
 
 async function uploadImageToStorage(file: File): Promise<string> {
+  if (!isSupabaseConfigured) {
+    // return local preview URL when Supabase not configured
+    return URL.createObjectURL(file);
+  }
   const ext = file.name.split('.').pop();
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
   const { data, error } = await supabase.storage
