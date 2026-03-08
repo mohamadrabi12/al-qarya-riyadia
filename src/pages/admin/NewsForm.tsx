@@ -68,7 +68,7 @@ export default function NewsForm() {
     setError('');
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
 
@@ -95,12 +95,17 @@ export default function NewsForm() {
       ...form, title, summary, content, author,
       publishedAt: new Date(form.publishedAt).toISOString(),
     };
-    if (isEdit && id) {
-      updateArticle(id, articleData);
-    } else {
-      addArticle(articleData);
+    try {
+      if (isEdit && id) {
+        await updateArticle(id, articleData);
+      } else {
+        await addArticle(articleData);
+      }
+      navigate('/admin');
+    } catch {
+      setError('حدث خطأ أثناء الحفظ. يرجى المحاولة مرة أخرى.');
+      setIsSubmitting(false);
     }
-    navigate('/admin');
   };
 
   if (notFound) {

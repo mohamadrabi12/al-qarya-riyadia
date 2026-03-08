@@ -7,9 +7,9 @@ export default function Dashboard() {
   const { logout } = useAuth();
   const navigate = useNavigate();
 
-  const handleDelete = (id: string, title: string) => {
+  const handleDelete = async (id: string, title: string) => {
     if (window.confirm(`هل أنت متأكد من حذف الخبر: "${title}"؟`)) {
-      deleteArticle(id);
+      await deleteArticle(id);
     }
   };
 
