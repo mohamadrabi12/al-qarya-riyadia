@@ -1,19 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { useNews } from '../../context/NewsContext';
+import { supabase } from '../../lib/supabase';
 import type { Category, NewsArticle } from '../../types';
 
 const CATEGORIES: Category[] = ['كرة القدم', 'كرة السلة', 'التنس', 'السباحة', 'الملاكمة', 'غيرها'];
-
-function isValidImageUrl(url: string): boolean {
-  if (!url) return true;
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
-  } catch {
-    return false;
-  }
-}
 
 const DEFAULT_FORM = {
   title: '',
@@ -27,13 +18,30 @@ const DEFAULT_FORM = {
   publishedAt: new Date().toISOString().slice(0, 16),
 };
 
+async function uploadImageToStorage(file: File): Promise<string> {
+  const ext = file.name.split('.').pop();
+  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  const { data, error } = await supabase.storage
+    .from('article-images')
+    .upload(fileName, file, { cacheControl: '3600', upsert: false });
+  if (error) throw new Error(error.message);
+  const { data: urlData } = supabase.storage
+    .from('article-images')
+    .getPublicUrl(data.path);
+  return urlData.publicUrl;
+}
+
 export default function NewsForm() {
   const { id } = useParams<{ id: string }>();
   const isEdit = Boolean(id);
   const { addArticle, updateArticle, getArticleById } = useNews();
   const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [form, setForm] = useState(DEFAULT_FORM);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string>('');
+  const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notFound, setNotFound] = useState(false);
@@ -53,11 +61,21 @@ export default function NewsForm() {
           isFeatured: article.isFeatured,
           publishedAt: article.publishedAt.slice(0, 16),
         });
+        setImagePreview(article.imageUrl);
       } else {
         setNotFound(true);
       }
     }
   }, [id, isEdit, getArticleById]);
+
+  // cleanup object URLs
+  useEffect(() => {
+    return () => {
+      if (imagePreview && imagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreview);
+      }
+    };
+  }, [imagePreview]);
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
@@ -67,6 +85,45 @@ export default function NewsForm() {
     }));
     setError('');
   }, []);
+
+  const handleImageSelect = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setError('يرجى اختيار ملف صورة صالح');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setError('حجم الصورة يجب أن يكون أقل من 5 ميغابايت');
+      return;
+    }
+    if (imagePreview && imagePreview.startsWith('blob:')) {
+      URL.revokeObjectURL(imagePreview);
+    }
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+    setError('');
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleImageSelect(file);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) handleImageSelect(file);
+  };
+
+  const handleRemoveImage = () => {
+    if (imagePreview && imagePreview.startsWith('blob:')) {
+      URL.revokeObjectURL(imagePreview);
+    }
+    setImageFile(null);
+    setImagePreview('');
+    setForm(prev => ({ ...prev, imageUrl: '' }));
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,17 +142,21 @@ export default function NewsForm() {
       setError('عنوان الخبر يجب أن يكون 5 أحرف على الأقل');
       return;
     }
-    if (form.imageUrl && !isValidImageUrl(form.imageUrl)) {
-      setError('رابط الصورة غير صحيح. يجب أن يبدأ بـ https:// أو http://');
-      return;
-    }
 
     setIsSubmitting(true);
-    const articleData: Omit<NewsArticle, 'id' | 'views'> = {
-      ...form, title, summary, content, author,
-      publishedAt: new Date(form.publishedAt).toISOString(),
-    };
     try {
+      let imageUrl = form.imageUrl;
+
+      // upload new image if selected
+      if (imageFile) {
+        imageUrl = await uploadImageToStorage(imageFile);
+      }
+
+      const articleData: Omit<NewsArticle, 'id' | 'views'> = {
+        ...form, title, summary, content, author, imageUrl,
+        publishedAt: new Date(form.publishedAt).toISOString(),
+      };
+
       if (isEdit && id) {
         await updateArticle(id, articleData);
       } else {
@@ -185,32 +246,58 @@ export default function NewsForm() {
             </div>
           </div>
 
+          {/* Image Upload */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">
-              رابط الصورة
-            </label>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">صورة الخبر</label>
+
+            {imagePreview ? (
+              <div className="relative">
+                <img
+                  src={imagePreview}
+                  alt="preview"
+                  className="w-full h-48 object-cover rounded-lg border border-gray-200"
+                />
+                <button
+                  type="button"
+                  onClick={handleRemoveImage}
+                  className="absolute top-2 left-2 bg-red-600 text-white rounded-full w-7 h-7 flex items-center justify-center text-sm hover:bg-red-700 transition-colors shadow-md"
+                  title="حذف الصورة"
+                >
+                  ✕
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="absolute bottom-2 left-2 bg-white/90 text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-white transition-colors shadow-md border border-gray-200"
+                >
+                  تغيير الصورة
+                </button>
+              </div>
+            ) : (
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={handleDrop}
+                className={`w-full h-40 border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer transition-colors ${
+                  isDragging
+                    ? 'border-primary bg-primary/5'
+                    : 'border-gray-300 hover:border-primary hover:bg-gray-50'
+                }`}
+              >
+                <span className="text-4xl mb-2">📷</span>
+                <p className="text-sm font-medium text-gray-600">اضغط لرفع صورة أو اسحبها هنا</p>
+                <p className="text-xs text-gray-400 mt-1">PNG، JPG، WEBP - حتى 5MB</p>
+              </div>
+            )}
+
             <input
-              name="imageUrl"
-              value={form.imageUrl}
-              onChange={handleChange}
-              placeholder="https://..."
-              className={`w-full border rounded-lg px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20 transition-colors ${
-                form.imageUrl && !isValidImageUrl(form.imageUrl)
-                  ? 'border-red-400 focus:border-red-400'
-                  : 'border-gray-300 focus:border-primary'
-              }`}
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleFileInputChange}
+              className="hidden"
             />
-            {form.imageUrl && !isValidImageUrl(form.imageUrl) && (
-              <p className="text-red-500 text-xs mt-1">⚠️ الرابط غير صحيح. يجب أن يبدأ بـ https://</p>
-            )}
-            {form.imageUrl && isValidImageUrl(form.imageUrl) && (
-              <img
-                src={form.imageUrl}
-                alt="preview"
-                className="mt-2 h-32 w-full object-cover rounded-lg border border-gray-200"
-                onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-              />
-            )}
           </div>
 
           <div>

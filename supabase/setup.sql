@@ -37,6 +37,23 @@ CREATE POLICY "Public delete articles" ON articles
   FOR DELETE USING (true);
 
 -- ========================================
+-- إعداد تخزين الصور (Storage)
+-- ملاحظة: أنشئ الـ bucket يدوياً من Supabase Dashboard:
+-- Storage → New bucket → اسم: article-images → Public: ON
+-- ثم أضف هذه السياسة:
+-- ========================================
+
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('article-images', 'article-images', true)
+ON CONFLICT DO NOTHING;
+
+CREATE POLICY "Public upload images" ON storage.objects
+  FOR INSERT WITH CHECK (bucket_id = 'article-images');
+
+CREATE POLICY "Public read images" ON storage.objects
+  FOR SELECT USING (bucket_id = 'article-images');
+
+-- ========================================
 -- بيانات تجريبية - احذفها إذا لم تحتجها
 -- ========================================
 
